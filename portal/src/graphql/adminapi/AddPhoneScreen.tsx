@@ -1,18 +1,10 @@
-import React, {
-  useCallback,
-  useContext,
-  useMemo,
-  useEffect,
-  useState,
-} from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useCallback, useContext, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Dropdown, Label } from "@fluentui/react";
 import deepEqual from "deep-equal";
 import { Context, FormattedMessage } from "@oursky/react-messageformat";
 
 import NavBreadcrumb from "../../NavBreadcrumb";
-import NavigationBlockerDialog from "../../NavigationBlockerDialog";
-import ButtonWithLoading from "../../ButtonWithLoading";
 import {
   ModifiedIndicatorPortal,
   ModifiedIndicatorWrapper,
@@ -20,8 +12,16 @@ import {
 import ShowLoading from "../../ShowLoading";
 import ShowError from "../../ShowError";
 import FormTextField from "../../FormTextField";
-import { useDropdown, useIntegerTextField } from "../../hook/useInput";
+import { passwordFieldErrorRules } from "../../PasswordField";
+import AddIdentityForm from "./AddIdentityForm";
+import {
+  useDropdown,
+  useIntegerTextField,
+  useTextField,
+} from "../../hook/useInput";
 import { useAppConfigQuery } from "../portal/query/appConfigQuery";
+import { UserQuery_node_User } from "./query/__generated__/UserQuery";
+import { useUserQuery } from "./query/userQuery";
 import { useCreateLoginIDIdentityMutation } from "./mutations/createIdentityMutation";
 import { PortalAPIAppConfig } from "../../types";
 import { useValidationError } from "../../error/useValidationError";
@@ -34,21 +34,21 @@ import styles from "./AddPhoneScreen.module.scss";
 
 interface AddPhoneFormProps {
   appConfig: PortalAPIAppConfig | null;
+  user: UserQuery_node_User | null;
 }
 
 const AddPhoneForm: React.FC<AddPhoneFormProps> = function AddPhoneForm(
   props: AddPhoneFormProps
 ) {
-  const { appConfig } = props;
+  const { appConfig, user } = props;
   const { userID } = useParams();
-  const navigate = useNavigate();
+  const { renderToString } = useContext(Context);
 
   const {
     createIdentity,
     loading: creatingIdentity,
     error: createIdentityError,
   } = useCreateLoginIDIdentityMutation(userID);
-  const { renderToString } = useContext(Context);
 
   const countryCodeConfig = useMemo(() => {
     const countryCodeConfig = appConfig?.ui?.country_calling_code;
@@ -66,19 +66,27 @@ const AddPhoneForm: React.FC<AddPhoneFormProps> = function AddPhoneForm(
     return {
       phone: "",
       countryCode: countryCodeConfig.defaultCallingCode,
+      password: "",
     };
   }, [countryCodeConfig]);
 
-  const [submittedForm, setSubmittedForm] = useState<boolean>(false);
   const [formData, setFormData] = useState(initialFormData);
 
-  const { phone, countryCode } = formData;
+  const [localValidationErrorMessage, setLocalViolationErrorMessage] = useState<
+    string | undefined
+  >(undefined);
+
+  const { phone, countryCode, password } = formData;
 
   const { onChange: onPhoneChange } = useIntegerTextField((value) => {
     setFormData((prev) => ({
       ...prev,
       phone: value,
     }));
+  });
+
+  const { onChange: onPasswordChange } = useTextField((value) => {
+    setFormData((prev) => ({ ...prev, password: value }));
   });
 
   const displayCountryCode = useCallback((countryCode: string) => {
@@ -104,31 +112,13 @@ const AddPhoneForm: React.FC<AddPhoneFormProps> = function AddPhoneForm(
     return !deepEqual(initialFormData, formData);
   }, [formData, initialFormData]);
 
-  const onFormSubmit = useCallback(
-    (ev: React.SyntheticEvent<HTMLElement>) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-
-      const combinedPhone = `+${countryCode}${phone}`;
-      createIdentity({ key: "phone", value: combinedPhone })
-        .then((identity) => {
-          if (identity != null) {
-            setSubmittedForm(true);
-          }
-        })
-        .catch(() => {});
-    },
-    [countryCode, phone, createIdentity]
-  );
-
-  useEffect(() => {
-    if (submittedForm) {
-      navigate("..#connected-identities");
-    }
-  }, [submittedForm, navigate]);
+  const combinedPhone = useMemo(() => {
+    return `+${countryCode}${phone}`;
+  }, [countryCode, phone]);
 
   const resetForm = useCallback(() => {
     setFormData(initialFormData);
+    setLocalViolationErrorMessage(undefined);
   }, [initialFormData]);
 
   const {
@@ -138,7 +128,7 @@ const AddPhoneForm: React.FC<AddPhoneFormProps> = function AddPhoneForm(
   } = useValidationError(createIdentityError);
 
   const {
-    errorMessage: genericErrorMessage,
+    errorMessageMap,
     unrecognizedError,
     unhandledCauses,
   } = useGenericError(otherError, rawUnhandledCauses, [
@@ -146,61 +136,80 @@ const AddPhoneForm: React.FC<AddPhoneFormProps> = function AddPhoneForm(
       reason: "InvariantViolated",
       kind: "DuplicatedIdentity",
       errorMessageID: "AddPhoneScreen.error.duplicated-phone-number",
+      field: "phone",
     },
+    ...passwordFieldErrorRules,
   ]);
 
   return (
     <FormContext.Provider value={formContextValue}>
-      <form className={styles.form} onSubmit={onFormSubmit}>
-        {unrecognizedError && <ShowError error={unrecognizedError} />}
-        <ShowUnhandledValidationErrorCause causes={unhandledCauses} />
-        <NavigationBlockerDialog
-          blockNavigation={!submittedForm && isFormModified}
-        />
-        <ModifiedIndicatorPortal
-          resetForm={resetForm}
-          isModified={isFormModified}
-        />
-        <section className={styles.phoneNumberFields}>
-          <Label className={styles.phoneNumberLabel}>
-            <FormattedMessage id="AddPhoneScreen.phone.label" />
-          </Label>
-          <Dropdown
-            className={styles.countryCode}
-            options={countryCodeOptions}
-            selectedKey={countryCode}
-            onChange={onCountryCodeChange}
-            ariaLabel={renderToString("AddPhoneScreen.country-code.label")}
-          />
-          <FormTextField
-            jsonPointer=""
-            parentJSONPointer=""
-            fieldName="phone"
-            fieldNameMessageID="AddPhoneScreen.phone.label"
-            hideLabel={true}
-            className={styles.phone}
-            value={phone}
-            onChange={onPhoneChange}
-            ariaLabel={renderToString("AddPhoneScreen.phone.label")}
-            errorMessage={genericErrorMessage}
-          />
-        </section>
-        <ButtonWithLoading
-          type="submit"
-          disabled={!isFormModified || submittedForm}
-          labelId="add"
-          loading={creatingIdentity}
-        />
-      </form>
+      {unrecognizedError && <ShowError error={unrecognizedError} />}
+      <ShowUnhandledValidationErrorCause causes={unhandledCauses} />
+      <ModifiedIndicatorPortal
+        resetForm={resetForm}
+        isModified={isFormModified}
+      />
+      <AddIdentityForm
+        className={styles.form}
+        appConfig={appConfig}
+        user={user}
+        password={password}
+        onPasswordChange={onPasswordChange}
+        passwordFieldErrorMessage={
+          localValidationErrorMessage ?? errorMessageMap.password
+        }
+        loginIdKey="phone"
+        loginId={combinedPhone}
+        isFormModified={isFormModified}
+        createIdentity={createIdentity}
+        creatingIdentity={creatingIdentity}
+        onLocalErrorMessageChange={setLocalViolationErrorMessage}
+        loginIdField={
+          <section className={styles.phoneNumberFields}>
+            <Label className={styles.phoneNumberLabel}>
+              <FormattedMessage id="AddPhoneScreen.phone.label" />
+            </Label>
+            <Dropdown
+              className={styles.countryCode}
+              options={countryCodeOptions}
+              selectedKey={countryCode}
+              onChange={onCountryCodeChange}
+              ariaLabel={renderToString("AddPhoneScreen.country-code.label")}
+            />
+            <FormTextField
+              jsonPointer=""
+              parentJSONPointer=""
+              fieldName="phone"
+              fieldNameMessageID="AddPhoneScreen.phone.label"
+              hideLabel={true}
+              className={styles.phone}
+              value={phone}
+              onChange={onPhoneChange}
+              ariaLabel={renderToString("AddPhoneScreen.phone.label")}
+              errorMessage={errorMessageMap.phone}
+            />
+          </section>
+        }
+      />
     </FormContext.Provider>
   );
 };
 
 const AddPhoneScreen: React.FC = function AddPhoneScreen() {
-  const { appID } = useParams();
-  const { effectiveAppConfig, loading, error, refetch } = useAppConfigQuery(
-    appID
-  );
+  const { appID, userID } = useParams();
+
+  const {
+    user,
+    loading: loadingUser,
+    error: userError,
+    refetch: refetchUser,
+  } = useUserQuery(userID);
+  const {
+    effectiveAppConfig,
+    loading: loadingAppConfig,
+    error: appConfigError,
+    refetch: refetchAppConfig,
+  } = useAppConfigQuery(appID);
 
   const navBreadcrumbItems = useMemo(() => {
     return [
@@ -210,19 +219,23 @@ const AddPhoneScreen: React.FC = function AddPhoneScreen() {
     ];
   }, []);
 
-  if (loading) {
+  if (loadingUser || loadingAppConfig) {
     return <ShowLoading />;
   }
 
-  if (error != null) {
-    return <ShowError error={error} onRetry={refetch} />;
+  if (userError != null) {
+    return <ShowError error={userError} onRetry={refetchUser} />;
+  }
+
+  if (appConfigError != null) {
+    return <ShowError error={appConfigError} onRetry={refetchAppConfig} />;
   }
 
   return (
     <div className={styles.root}>
       <ModifiedIndicatorWrapper className={styles.content}>
         <NavBreadcrumb items={navBreadcrumbItems} />
-        <AddPhoneForm appConfig={effectiveAppConfig} />
+        <AddPhoneForm appConfig={effectiveAppConfig} user={user} />
       </ModifiedIndicatorWrapper>
     </div>
   );

@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useCallback, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import deepEqual from "deep-equal";
 import { FormattedMessage } from "@oursky/react-messageformat";
 
@@ -8,13 +8,18 @@ import {
   ModifiedIndicatorWrapper,
 } from "../../ModifiedIndicatorPortal";
 import NavBreadcrumb from "../../NavBreadcrumb";
-import ButtonWithLoading from "../../ButtonWithLoading";
-import NavigationBlockerDialog from "../../NavigationBlockerDialog";
 import ShowError from "../../ShowError";
 import FormTextField from "../../FormTextField";
+import ShowLoading from "../../ShowLoading";
+import AddIdentityForm from "./AddIdentityForm";
+import { passwordFieldErrorRules } from "../../PasswordField";
 import ShowUnhandledValidationErrorCause from "../../error/ShowUnhandledValidationErrorCauses";
 import { useCreateLoginIDIdentityMutation } from "./mutations/createIdentityMutation";
 import { useTextField } from "../../hook/useInput";
+import { PortalAPIAppConfig } from "../../types";
+import { UserQuery_node_User } from "./query/__generated__/UserQuery";
+import { useUserQuery } from "./query/userQuery";
+import { useAppConfigQuery } from "../portal/query/appConfigQuery";
 import { FormContext } from "../../error/FormContext";
 import { useValidationError } from "../../error/useValidationError";
 import { useGenericError } from "../../error/useGenericError";
@@ -23,11 +28,19 @@ import styles from "./AddEmailScreen.module.scss";
 
 interface AddEmailFormData {
   email: string;
+  password: string;
 }
 
-const AddEmailScreen: React.FC = function AddEmailScreen() {
+interface AddEmailFormProps {
+  appConfig: PortalAPIAppConfig | null;
+  user: UserQuery_node_User | null;
+}
+
+const AddEmailForm: React.FC<AddEmailFormProps> = function AddEmailForm(
+  props: AddEmailFormProps
+) {
+  const { appConfig, user } = props;
   const { userID } = useParams();
-  const navigate = useNavigate();
 
   const {
     createIdentity,
@@ -35,7 +48,114 @@ const AddEmailScreen: React.FC = function AddEmailScreen() {
     error: createIdentityError,
   } = useCreateLoginIDIdentityMutation(userID);
 
-  const [submittedForm, setSubmittedForm] = useState<boolean>(false);
+  const initialFormData = useMemo(() => {
+    return {
+      email: "",
+      password: "",
+    };
+  }, []);
+  const [formData, setFormData] = useState<AddEmailFormData>(initialFormData);
+  const { email, password } = formData;
+
+  const [localValidationErrorMessage, setLocalViolationErrorMessage] = useState<
+    string | undefined
+  >(undefined);
+
+  const { onChange: onEmailChange } = useTextField((value) => {
+    setFormData((prev) => ({ ...prev, email: value }));
+  });
+  const { onChange: onPasswordChange } = useTextField((value) => {
+    setFormData((prev) => ({ ...prev, password: value }));
+  });
+
+  const isFormModified = useMemo(() => {
+    return !deepEqual(initialFormData, formData);
+  }, [initialFormData, formData]);
+
+  const resetForm = useCallback(() => {
+    setFormData(initialFormData);
+    setLocalViolationErrorMessage(undefined);
+  }, [initialFormData]);
+
+  const {
+    unhandledCauses: rawUnhandledCauses,
+    otherError,
+    value: formContextValue,
+  } = useValidationError(createIdentityError);
+
+  const {
+    errorMessageMap,
+    unrecognizedError,
+    unhandledCauses,
+  } = useGenericError(otherError, rawUnhandledCauses, [
+    {
+      reason: "InvariantViolated",
+      kind: "DuplicatedIdentity",
+      errorMessageID: "AddEmailScreen.error.duplicated-email",
+      field: "email",
+    },
+    ...passwordFieldErrorRules,
+  ]);
+
+  return (
+    <FormContext.Provider value={formContextValue}>
+      <ModifiedIndicatorPortal
+        resetForm={resetForm}
+        isModified={isFormModified}
+      />
+      {unrecognizedError && (
+        <div className={styles.error}>
+          <ShowError error={unrecognizedError} />
+        </div>
+      )}
+      <ShowUnhandledValidationErrorCause causes={unhandledCauses} />
+      <AddIdentityForm
+        className={styles.content}
+        appConfig={appConfig}
+        user={user}
+        password={password}
+        onPasswordChange={onPasswordChange}
+        passwordFieldErrorMessage={
+          localValidationErrorMessage ?? errorMessageMap.password
+        }
+        loginIdKey="email"
+        loginId={email}
+        isFormModified={isFormModified}
+        createIdentity={createIdentity}
+        creatingIdentity={creatingIdentity}
+        onLocalErrorMessageChange={setLocalViolationErrorMessage}
+        loginIdField={
+          <FormTextField
+            jsonPointer=""
+            parentJSONPointer=""
+            fieldName="email"
+            fieldNameMessageID="AddEmailScreen.email.label"
+            className={styles.emailField}
+            value={email}
+            onChange={onEmailChange}
+            errorMessage={errorMessageMap.email}
+          />
+        }
+      />
+    </FormContext.Provider>
+  );
+};
+
+const AddEmailScreen: React.FC = function AddEmailScreen() {
+  const { userID, appID } = useParams();
+
+  const {
+    user,
+    loading: loadingUser,
+    error: userError,
+    refetch: refetchUser,
+  } = useUserQuery(userID);
+  const {
+    effectiveAppConfig,
+    loading: loadingAppConfig,
+    error: appConfigError,
+    refetch: refetchAppConfig,
+  } = useAppConfigQuery(appID);
 
   const navBreadcrumbItems = useMemo(() => {
     return [
@@ -45,65 +165,17 @@ const AddEmailScreen: React.FC = function AddEmailScreen() {
     ];
   }, []);
 
-  const initialFormData = useMemo(() => {
-    return {
-      email: "",
-    };
-  }, []);
-  const [formData, setFormData] = useState<AddEmailFormData>(initialFormData);
-  const { email } = formData;
+  if (loadingUser || loadingAppConfig) {
+    return <ShowLoading />;
+  }
 
-  const { onChange: onEmailChange } = useTextField((value) => {
-    setFormData((prev) => ({ ...prev, email: value }));
-  });
+  if (userError != null) {
+    return <ShowError error={userError} onRetry={refetchUser} />;
+  }
 
-  const isFormModified = useMemo(() => {
-    return !deepEqual(initialFormData, formData);
-  }, [initialFormData, formData]);
-
-  const resetForm = useCallback(() => {
-    setFormData(initialFormData);
-  }, [initialFormData]);
-
-  const onFormSubmit = useCallback(
-    (ev: React.SyntheticEvent<HTMLElement>) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-
-      createIdentity({ key: "email", value: email })
-        .then((identity) => {
-          if (identity != null) {
-            setSubmittedForm(true);
-          }
-        })
-        .catch(() => {});
-    },
-    [email, createIdentity]
-  );
-
-  useEffect(() => {
-    if (submittedForm) {
-      navigate("..#connected-identities");
-    }
-  }, [submittedForm, navigate]);
-
-  const {
-    unhandledCauses: rawUnhandledCauses,
-    otherError,
-    value: formContextValue,
-  } = useValidationError(createIdentityError);
-
-  const {
-    errorMessage: genericErrorMessage,
-    unrecognizedError,
-    unhandledCauses,
-  } = useGenericError(otherError, rawUnhandledCauses, [
-    {
-      reason: "InvariantViolated",
-      kind: "DuplicatedIdentity",
-      errorMessageID: "AddEmailScreen.error.duplicated-email",
-    },
-  ]);
+  if (appConfigError != null) {
+    return <ShowError error={appConfigError} onRetry={refetchAppConfig} />;
+  }
 
   return (
     <div className={styles.root}>
@@ -112,39 +184,7 @@ const AddEmailScreen: React.FC = function AddEmailScreen() {
           className={styles.breadcrumb}
           items={navBreadcrumbItems}
         />
-        <ModifiedIndicatorPortal
-          resetForm={resetForm}
-          isModified={isFormModified}
-        />
-        <FormContext.Provider value={formContextValue}>
-          <form className={styles.content} onSubmit={onFormSubmit}>
-            {unrecognizedError && (
-              <div className={styles.error}>
-                <ShowError error={unrecognizedError} />
-              </div>
-            )}
-            <ShowUnhandledValidationErrorCause causes={unhandledCauses} />
-            <NavigationBlockerDialog
-              blockNavigation={!submittedForm && isFormModified}
-            />
-            <FormTextField
-              jsonPointer=""
-              parentJSONPointer=""
-              fieldName="email"
-              fieldNameMessageID="AddEmailScreen.email.label"
-              className={styles.emailField}
-              value={email}
-              onChange={onEmailChange}
-              errorMessage={genericErrorMessage}
-            />
-            <ButtonWithLoading
-              type="submit"
-              disabled={!isFormModified || submittedForm}
-              labelId="add"
-              loading={creatingIdentity}
-            />
-          </form>
-        </FormContext.Provider>
+        <AddEmailForm appConfig={effectiveAppConfig} user={user} />
       </ModifiedIndicatorWrapper>
     </div>
   );
