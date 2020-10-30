@@ -36,9 +36,17 @@ interface AddIdentityFormProps {
   onLocalErrorMessageChange: (errorMessage?: string) => void;
 }
 
+// required if
+// 1. no password authenticator
+// 2. login_id identity not included in identities
 function determineIsPasswordRequired(
+  appConfig: PortalAPIAppConfig | null,
   user: UserQuery_node_User | null
 ): boolean {
+  const identities = appConfig?.authentication?.identities ?? [];
+  if (!identities.includes("login_id")) {
+    return true;
+  }
   const authenticators =
     user?.authenticators?.edges
       ?.map((edge) => edge?.node?.type)
@@ -71,7 +79,7 @@ const AddIdentityForm: React.FC<AddIdentityFormProps> = function AddIdentityForm
   const { renderToString } = useContext(Context);
 
   const isPasswordRequired = useMemo(() => {
-    return determineIsPasswordRequired(user);
+    return determineIsPasswordRequired(appConfig, user);
   }, [user]);
 
   const passwordPolicy = useMemo(() => {
@@ -98,7 +106,9 @@ const AddIdentityForm: React.FC<AddIdentityFormProps> = function AddIdentityForm
         }
       }
 
-      createIdentity({ key: loginIdKey, value: loginId })
+      const requestPassword = isPasswordRequired ? password : undefined;
+
+      createIdentity({ key: loginIdKey, value: loginId }, requestPassword)
         .then((identity) => {
           if (identity != null) {
             setSubmittedForm(true);
